@@ -19,7 +19,9 @@ def get_llama(model):
     torch.nn.init.uniform_ = skip
     torch.nn.init.normal_ = skip
     from transformers import LlamaForCausalLM
-    model = LlamaForCausalLM.from_pretrained(model, torch_dtype=torch.float16)
+    model = LlamaForCausalLM.from_pretrained(model, 
+                                            torch_dtype=torch.float16,
+                                            use_auth_token=True)
     model.seqlen = 2048
     return model
 
