@@ -135,15 +135,20 @@ pip install -r requirements.txt
 ```
 ## Dependencies
 
-* `torch`: tested on v2.0.0+cu117
-* `transformers`: tested on v4.28.0.dev0
-* `datasets`: tested on v2.10.1
-* `safetensors`: tested on v0.3.0
+* `torch`: tested on v2.3.0+cu121
+* `transformers`: tested on v4.28.0
+* `datasets`: tested on v3.2.0
+* `safetensors`: tested on v0.3.1
 
-All experiments were run on a single NVIDIA RTX3090.
+All experiments were run on a single NVIDIA H800.
 
 # Language Generation
 ## LLaMA
+
+Example ${MODEL_DIR}: "meta-llama/Llama-2-7b-hf"
+Example dataset c4: $PROJ_ROOT/allenai/c4/en/
+- c4-train.00000-of-01024.json.gz
+- c4-validation.00000-of-00008.json.gz
 
 ```
 #convert LLaMA to hf
