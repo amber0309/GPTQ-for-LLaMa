@@ -30,16 +30,16 @@ def get_llama(model):
 def llama_sequential(model, dataloader, dev):
     print('Starting ...')
 
-    use_cache = model.config.use_cache
+    use_cache = model.config.use_cache  # True
     model.config.use_cache = False
-    layers = model.model.layers
+    layers = model.model.layers  # model.model - LlamaModel(), layers - ModuleList()
 
     model.model.embed_tokens = model.model.embed_tokens.to(dev)
     model.model.norm = model.model.norm.to(dev)
     layers[0] = layers[0].to(dev)
 
-    dtype = next(iter(model.parameters())).dtype
-    inps = torch.zeros((args.nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=dev)
+    dtype = next(iter(model.parameters())).dtype  # torch.float16
+    inps = torch.zeros((args.nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=dev)  # (128, 2048, 4096)
     cache = {'i': 0, 'attention_mask': None}
 
     class Catcher(nn.Module):
@@ -51,8 +51,8 @@ def llama_sequential(model, dataloader, dev):
         def forward(self, inp, **kwargs):
             inps[cache['i']] = inp
             cache['i'] += 1
-            cache['attention_mask'] = kwargs['attention_mask']
-            cache['position_ids'] = kwargs['position_ids']
+            cache['attention_mask'] = kwargs['attention_mask']  # (1, 1, 2048, 2048) upper diagonal -65504
+            cache['position_ids'] = kwargs['position_ids']  # (1, 2048) 0 ~ 2047
             raise ValueError
 
     layers[0] = Catcher(layers[0])
@@ -83,17 +83,18 @@ def llama_sequential(model, dataloader, dev):
         print('|       name       | weight_error | fp_inp_SNR | q_inp_SNR | time  |')
         print('+==================+==============+============+===========+=======+')
 
-        layer = layers[i].to(dev)
-        full = find_layers(layer)
+        layer = layers[i].to(dev)  # LlamaDecoderLayer()
+        full = find_layers(layer)  # dict = {'attr': net()}
         if args.true_sequential:
             sequential = [['self_attn.k_proj', 'self_attn.v_proj', 'self_attn.q_proj'], ['self_attn.o_proj'], ['mlp.up_proj', 'mlp.gate_proj'], ['mlp.down_proj']]
         else:
             sequential = [list(full.keys())]
 
         for names in sequential:
-            subset = {n: full[n] for n in names}
+            subset = {n: full[n] for n in names}  # dict = {'attr': net()}
             gptq = {}
             for name in subset:
+                # add layer into GPTQ obj with appropriate parameters
                 gptq[name] = GPTQ(subset[name], observe=args.observe)
                 gptq[name].quantizer.configure(args.wbits, perchannel=True, sym=args.sym, mse=False)
 
@@ -106,13 +107,16 @@ def llama_sequential(model, dataloader, dev):
 
             handles = []
             for name in subset:
+                # add hook to layer "name"
                 handles.append(subset[name].register_forward_hook(add_batch(name)))
             for j in range(args.nsamples):
+                # forward pass to record Hessian matrix H
                 outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
             for h in handles:
                 h.remove()
 
             for name in subset:
+                # do quantization here
                 scale, zero, g_idx, error = gptq[name].fasterquant(percdamp=args.percdamp, groupsize=args.groupsize, actorder=args.act_order, name=name)
                 quantizers['model.layers.%d.%s' % (i, name)] = (gptq[name].quantizer.cpu(), scale.cpu(), zero.cpu(), g_idx.cpu(), args.wbits, args.groupsize)
 
@@ -121,6 +125,7 @@ def llama_sequential(model, dataloader, dev):
                 else:
                     gptq[name].free()
 
+        # unclear why forward again
         for j in range(args.nsamples):
             outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
 
@@ -129,7 +134,7 @@ def llama_sequential(model, dataloader, dev):
         del gptq
         torch.cuda.empty_cache()
 
-        inps, outs = outs, inps
+        inps, outs = outs, inps  # outputs of layer i corresponds to inputs of layer i+1
         print('+------------------+--------------+------------+-----------+-------+')
         print('\n')
 
@@ -267,12 +272,12 @@ def llama_eval(model, testenc, dev):
 def llama_pack(model, quantizers, wbits, groupsize):
     layers = find_layers(model)
     layers = {n: layers[n] for n in quantizers}
-    quant.make_quant_linear(model, quantizers, wbits, groupsize)
-    qlayers = find_layers(model, [quant.QuantLinear])
+    quant.make_quant_linear(model, quantizers, wbits, groupsize)  # replace layer in model with QuantLinear()
+    qlayers = find_layers(model, [quant.QuantLinear])  # dict of quant layers
     print('Packing ...')
     for name in qlayers:
         print(name)
-        quantizers[name], scale, zero, g_idx, _, _ = quantizers[name]
+        quantizers[name], scale, zero, g_idx, _, _ = quantizers[name]  # sclae(4096, 32), zero(4096,32), g_idx(4096), 32 - n_ebd / groupsize
         qlayers[name].pack(layers[name], scale, zero, g_idx)
     print('Done.')
     return model
@@ -300,7 +305,7 @@ def load_quant(model, checkpoint, wbits, groupsize=-1, fused_mlp=True, eval=True
     for name in ['lm_head']:
         if name in layers:
             del layers[name]
-    quant.make_quant_linear(model, layers, wbits, groupsize)
+    quant.make_quant_linear(model, layers, wbits, groupsize)  # Linear() --> QuantLinear()
 
     del layers
 
@@ -312,8 +317,8 @@ def load_quant(model, checkpoint, wbits, groupsize=-1, fused_mlp=True, eval=True
         model.load_state_dict(torch.load(checkpoint))
 
     if eval:
-        quant.make_quant_attn(model)
-        quant.make_quant_norm(model)
+        quant.make_quant_attn(model)  # 1) merge kqv, 2) LlamaAttention() --> QuantLlamaAttention()
+        quant.make_quant_norm(model)  # LlamaRMSNorm() --> TritonLlamaRMSNorm()
         if fused_mlp:
             quant.make_fused_mlp(model)
 

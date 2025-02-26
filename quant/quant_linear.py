@@ -316,7 +316,7 @@ class QuantLinear(nn.Module):
         self.register_buffer('qweight', torch.zeros((infeatures // 32 * self.bits, outfeatures), dtype=torch.int32))
         self.register_buffer('qzeros', torch.zeros((math.ceil(infeatures / self.groupsize), outfeatures // 32 * self.bits), dtype=torch.int32))
         self.register_buffer('scales', torch.zeros((math.ceil(infeatures / self.groupsize), outfeatures), dtype=torch.float16))
-        self.register_buffer('g_idx', torch.tensor([i // self.groupsize for i in range(infeatures)], dtype=torch.int32))
+        self.register_buffer('g_idx', torch.tensor([i // self.groupsize for i in range(infeatures)], dtype=torch.int32))  # group index
         if bias:
             self.register_buffer('bias', torch.zeros((outfeatures), dtype=torch.float16))
         else:
@@ -335,10 +335,10 @@ class QuantLinear(nn.Module):
         intweight = []
         for idx in range(self.infeatures):
             intweight.append(torch.round((linear.weight.data[:, idx] + scale_zeros[self.g_idx[idx]]) / self.scales[self.g_idx[idx]]).to(torch.int)[:, None])
-        intweight = torch.cat(intweight, dim=1)
+        intweight = torch.cat(intweight, dim=1)  # (4096, 4096)
         intweight = intweight.t().contiguous()
         intweight = intweight.numpy().astype(np.uint32)
-        qweight = np.zeros((intweight.shape[0] // 32 * self.bits, intweight.shape[1]), dtype=np.uint32)
+        qweight = np.zeros((intweight.shape[0] // 32 * self.bits, intweight.shape[1]), dtype=np.uint32)  # TODO (512, 4096)
         i = 0
         row = 0
         while row < qweight.shape[0]:

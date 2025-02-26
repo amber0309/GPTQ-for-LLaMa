@@ -85,7 +85,7 @@ class GPTQ:
         if isinstance(self.layer, nn.Linear) or isinstance(self.layer, transformers.Conv1D):
             if len(inp.shape) == 3:
                 inp = inp.reshape((-1, inp.shape[-1]))
-            inp = inp.t()
+            inp = inp.t()  # (4096, 2048)
         if isinstance(self.layer, nn.Conv2d):
             unfold = nn.Unfold(self.layer.kernel_size, dilation=self.layer.dilation, padding=self.layer.padding, stride=self.layer.stride)
             inp = unfold(inp)
@@ -96,7 +96,7 @@ class GPTQ:
         # inp = inp.float()
         inp = math.sqrt(2 / self.nsamples) * inp.float()
         # self.H += 2 / self.nsamples * inp.matmul(inp.t())
-        self.H += inp.matmul(inp.t())
+        self.H += inp.matmul(inp.t())  # final H = (\sum^{namp-1}_{j=0} 2X_{j}X_{j}^T) / nsamp
 
     def print_loss(self, name, q_weight, weight_error, timecost):
         table = Texttable()
@@ -138,7 +138,7 @@ class GPTQ:
         tick = time.time()
 
         if not self.quantizer.ready():
-            self.quantizer.find_params(W, weight=True)
+            self.quantizer.find_params(W, weight=True)  # compute scale and zero for quantization
 
         H = self.H
         if not self.observe:
@@ -155,13 +155,13 @@ class GPTQ:
         Losses = torch.zeros_like(W)
         Q = torch.zeros_like(W)
 
-        damp = percdamp * torch.mean(torch.diag(H))
+        damp = percdamp * torch.mean(torch.diag(H))  # dampening parameter \lambda
         diag = torch.arange(self.columns, device=self.dev)
         H[diag, diag] += damp
-        H = torch.linalg.cholesky(H)
-        H = torch.cholesky_inverse(H)
-        H = torch.linalg.cholesky(H, upper=True)
-        Hinv = H
+        H = torch.linalg.cholesky(H)  # L - cholesky decomposition of H 
+        H = torch.cholesky_inverse(H)  # H^{-1} - inverse of H
+        H = torch.linalg.cholesky(H, upper=True)  # L^T - cholesky decomp of H^{-1}
+        Hinv = H  # line 3 in Algorithm 1
 
         g_idx = []
         scale = []
@@ -183,7 +183,7 @@ class GPTQ:
                 d = Hinv1[i, i]
 
                 if groupsize != -1:
-                    if (i1 + i) % groupsize == 0:
+                    if (i1 + i) % groupsize == 0:  #  groupsize integer multiply
                         self.quantizer.find_params(W[:, (i1 + i):(i1 + i + groupsize)], weight=True)
 
                     if ((i1 + i) // groupsize) - now_idx == -1:
@@ -191,18 +191,18 @@ class GPTQ:
                         zero.append(self.quantizer.zero)
                         now_idx += 1
 
-                q = self.quantizer.quantize(w.unsqueeze(1)).flatten()
+                q = self.quantizer.quantize(w.unsqueeze(1)).flatten() # line 6 in Algorithm 1
                 Q1[:, i] = q
                 Losses1[:, i] = (w - q)**2 / d**2
 
-                err1 = (w - q) / d
-                W1[:, i:] -= err1.unsqueeze(1).matmul(Hinv1[i, i:].unsqueeze(0))
+                err1 = (w - q) / d  # line 7 in Algorithm 1
+                W1[:, i:] -= err1.unsqueeze(1).matmul(Hinv1[i, i:].unsqueeze(0))  # line 8 in Algorithm 1
                 Err1[:, i] = err1
 
             Q[:, i1:i2] = Q1
             Losses[:, i1:i2] = Losses1 / 2
 
-            W[:, i2:] -= Err1.matmul(Hinv[i1:i2, i2:])
+            W[:, i2:] -= Err1.matmul(Hinv[i1:i2, i2:])  # line 10 in Algorithm 1
 
         torch.cuda.synchronize()
         error = torch.sum(Losses).item()
